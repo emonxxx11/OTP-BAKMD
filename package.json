@@ -1,16 +1,13 @@
 {
   "name": "otp-server",
   "version": "1.0.0",
-  "description": "OTP backend server with Firebase and nodemailer",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "Emon",
-  "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "firebase-admin": "^11.10.1",
-    "nodemailer": "^6.9.4"
+    "body-parser": "^1.20.2",
+    "cors": "^2.8.5"
   }
 }
