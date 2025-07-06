@@ -5,7 +5,12 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(express.json());
 
-// Initialize Firebase Admin SDK once
+// ✅ Root route to verify server is live
+app.get('/', (req, res) => {
+  res.status(200).send('✅ OTP Server is Live!');
+});
+
+// Initialize Firebase Admin SDK
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: "epic-e-sport",
@@ -42,19 +47,18 @@ snZMQZNu27V+0TvCTRFCMViI
   databaseURL: "https://epic-e-sport-default-rtdb.firebaseio.com"
 });
 
-// Setup nodemailer transporter with your email credentials (change accordingly)
+// ✅ Setup nodemailer with your Gmail
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'epicesporthelp@gmail.com',     // your email
-    pass: 'emonxxxx1624'                   // your email password or app password
+    user: 'epicesporthelp@gmail.com',
+    pass: 'emonxxxx1624' // Use app password if 2FA enabled
   }
 });
 
+// ✅ Send OTP
 app.post('/send-otp', async (req, res) => {
   const { email } = req.body;
-
-  // 1. Check if email exists in Firebase DB
   const db = admin.database();
   const usersRef = db.ref('users');
   const snapshot = await usersRef.orderByChild('email').equalTo(email).once('value');
@@ -63,17 +67,13 @@ app.post('/send-otp', async (req, res) => {
     return res.status(404).json({ error: 'Email not found' });
   }
 
-  // 2. Generate OTP (6 digit)
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-  // 3. Save OTP with expiry (e.g. 5 minutes)
-  const otpRef = db.ref(`otps/${email.replace('.', ',')}`); // replace dot to avoid path issues
+  const otpRef = db.ref(`otps/${email.replace('.', ',')}`);
   await otpRef.set({
     code: otp,
     expiresAt: Date.now() + 5 * 60 * 1000
   });
 
-  // 4. Send OTP email
   const mailOptions = {
     from: 'epicesporthelp@gmail.com',
     to: email,
@@ -89,9 +89,9 @@ app.post('/send-otp', async (req, res) => {
   });
 });
 
+// ✅ Verify OTP
 app.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
-
   const db = admin.database();
   const otpRef = db.ref(`otps/${email.replace('.', ',')}`);
   const snapshot = await otpRef.once('value');
@@ -101,10 +101,7 @@ app.post('/verify-otp', async (req, res) => {
   }
 
   const data = snapshot.val();
-
-  // Check expiry and match
   if (Date.now() > data.expiresAt) {
-    // Delete expired OTP
     await otpRef.remove();
     return res.status(400).json({ error: 'OTP expired' });
   }
@@ -113,15 +110,12 @@ app.post('/verify-otp', async (req, res) => {
     return res.status(400).json({ error: 'Invalid OTP' });
   }
 
-  // OTP valid, delete it
   await otpRef.remove();
-
-  // Continue with password reset or whatever next step
-
   res.json({ message: 'OTP verified successfully' });
 });
 
+// ✅ Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
