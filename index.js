@@ -1,55 +1,76 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const nodemailer = require('nodemailer');
 const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(bodyParser.json());
 
-// In-memory store for OTPs (not for production)
-const otpStore = new Map();
+// Dummy in-memory OTP storage
+const otpStore = {};
 
+// Replace with your verified Gmail account and app password
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: 'epicesporthelp@gmail.com', // ✅ your Gmail address
+    pass: 'emonxxxx1624'    // ✅ app-specific password, NOT your normal password
+  }
+});
+
+// Health check route
 app.get('/', (req, res) => {
   res.send('✅ OTP Server is Live!');
 });
 
-app.post('/send-otp', (req, res) => {
+// Send OTP
+app.post('/send-otp', async (req, res) => {
   const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email is required' });
 
-  // Generate 6-digit OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-  // Save OTP in store with expiry (5 minutes)
-  otpStore.set(email, { otp, expiresAt: Date.now() + 5 * 60 * 1000 });
-
-  console.log(`Sending OTP ${otp} to ${email}`);
-
-  // TODO: Send OTP email here (use nodemailer or any email service)
-
-  return res.json({ success: true, message: 'OTP sent' });
-});
-
-app.post('/verify-otp', (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP are required' });
-
-  const record = otpStore.get(email);
-  if (!record) return res.status(400).json({ error: 'No OTP found for this email' });
-
-  if (Date.now() > record.expiresAt) {
-    otpStore.delete(email);
-    return res.status(400).json({ error: 'OTP expired' });
+  if (!email) {
+    return res.status(400).json({ success: false, message: 'Email is required' });
   }
 
-  if (record.otp !== otp) return res.status(400).json({ error: 'Invalid OTP' });
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  otpStore[email] = otp;
 
-  otpStore.delete(email);
-  return res.json({ success: true, message: 'OTP verified' });
+  try {
+    await transporter.sendMail({
+      from: 'epicesporthelp@gmail.com',
+      to: email,
+      subject: 'Your OTP Code',
+      text: `Your OTP code is: ${otp}`
+    });
+
+    console.log(`✅ OTP ${otp} sent to ${email}`);
+    res.json({ success: true, message: 'OTP sent' });
+  } catch (error) {
+    console.error('❌ Error sending OTP:', error);
+    res.status(500).json({ success: false, message: 'Failed to send OTP email' });
+  }
+});
+
+// Verify OTP
+app.post('/verify-otp', (req, res) => {
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    return res.status(400).json({ success: false, message: 'Email and OTP are required' });
+  }
+
+  const validOtp = otpStore[email];
+
+  if (validOtp && validOtp === otp) {
+    delete otpStore[email]; // remove OTP after verification
+    return res.json({ success: true, message: 'OTP verified' });
+  } else {
+    return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
+  }
 });
 
 app.listen(PORT, () => {
-  console.log(`Server started on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
