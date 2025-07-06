@@ -1,114 +1,86 @@
-require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
+require('dotenv').config();
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
 // Initialize Firebase Admin SDK
-const serviceAccount = {
-  "type": "service_account",
-  "project_id": process.env.FIREBASE_PROJECT_ID,
-  "private_key_id": process.env.FIREBASE_PRIVATE_KEY_ID,
-  "private_key": process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-  "client_email": process.env.FIREBASE_CLIENT_EMAIL,
-  "client_id": process.env.FIREBASE_CLIENT_ID,
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": process.env.FIREBASE_CLIENT_CERT_URL
-};
-
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://your-firebase-database-url.firebaseio.com"  // Replace with your Realtime DB URL
+  credential: admin.credential.cert({
+    type: "service_account",
+    project_id: process.env.FIREBASE_PROJECT_ID,
+    private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+    private_key: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+    client_email: process.env.FIREBASE_CLIENT_EMAIL,
+    client_id: process.env.FIREBASE_CLIENT_ID,
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+    client_x509_cert_url: process.env.FIREBASE_CLIENT_CERT_URL
+  }),
+  databaseURL: `https://${process.env.FIREBASE_PROJECT_ID}.firebaseio.com`
 });
 
 const db = admin.database();
 
-// Configure Nodemailer transporter for Gmail SMTP
+// Nodemailer transporter
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER,   // your gmail address
-    pass: process.env.EMAIL_PASS    // your gmail app password
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
   }
 });
 
-// Utility: Generate 6-digit OTP
-function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-// API Endpoint to request OTP
-app.post('/request-otp', async (req, res) => {
+// Send OTP
+app.post('/send-otp', async (req, res) => {
   const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email is required' });
+  const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
   try {
-    // Check if email exists in your Firebase DB users node
-    const usersRef = db.ref('users');
-    const snapshot = await usersRef.orderByChild('email').equalTo(email).once('value');
-    if (!snapshot.exists()) {
-      return res.status(404).json({ error: 'Email not found' });
-    }
-
-    // Generate OTP and expiration time (5 min)
-    const otp = generateOTP();
-    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes in ms
-
-    // Save OTP temporarily in Firebase under "otps/email"
-    const otpRef = db.ref('otps').child(email.replace(/\./g, '_'));
-    await otpRef.set({ otp, expiresAt });
-
-    // Send OTP email
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
-      subject: 'Your Epic E-Sport OTP Code',
-      text: `Your OTP code is: ${otp}. It will expire in 5 minutes.`
+      subject: 'Your OTP Code',
+      text: `Your OTP is: ${otp}`
     });
 
-    res.json({ message: 'OTP sent successfully' });
+    await db.ref(`otps/${email.replace('.', '_')}`).set({
+      otp,
+      timestamp: Date.now()
+    });
 
-  } catch (error) {
-    console.error('Error in /request-otp:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.json({ success: true, message: 'OTP sent' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Failed to send OTP' });
   }
 });
 
-// API Endpoint to verify OTP
+// Verify OTP
 app.post('/verify-otp', async (req, res) => {
   const { email, otp } = req.body;
-  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP are required' });
+  const ref = db.ref(`otps/${email.replace('.', '_')}`);
 
-  try {
-    const otpRef = db.ref('otps').child(email.replace(/\./g, '_'));
-    const snapshot = await otpRef.once('value');
-
-    if (!snapshot.exists()) {
-      return res.status(400).json({ error: 'OTP not found or expired' });
-    }
-
+  ref.once('value', (snapshot) => {
     const data = snapshot.val();
-    if (data.otp === otp && Date.now() < data.expiresAt) {
-      // OTP valid, delete it after verification
-      await otpRef.remove();
-      return res.json({ message: 'OTP verified successfully' });
-    } else {
-      return res.status(400).json({ error: 'Invalid or expired OTP' });
+    if (!data) {
+      return res.status(404).json({ success: false, message: 'OTP not found or expired' });
     }
 
-  } catch (error) {
-    console.error('Error in /verify-otp:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
+    const isValid = data.otp === otp && (Date.now() - data.timestamp) <= 5 * 60 * 1000;
+    if (isValid) {
+      ref.remove(); // delete OTP after successful verification
+      res.json({ success: true, message: 'OTP verified' });
+    } else {
+      res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
+    }
+  });
 });
 
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+  console.
