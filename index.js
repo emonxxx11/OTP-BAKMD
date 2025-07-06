@@ -1,94 +1,109 @@
 const express = require('express');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
-const fs = require('fs');
+const bodyParser = require('body-parser');
 
-const app = express();
-app.use(express.json());
-
-// ✅ Load Firebase credentials from file
-const serviceAccount = JSON.parse(fs.readFileSync('./firebase-key.json', 'utf8'));
-
-// ✅ Initialize Firebase Admin SDK
+// Initialize Firebase Admin SDK with your service account key JSON file
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://epic-e-sport-default-rtdb.firebaseio.com"
+  credential: admin.credential.cert(require('./firebase-key.json')),
+  databaseURL: 'https://epic-e-sport-default-rtdb.firebaseio.com/'
 });
 
-// ✅ Setup nodemailer (use Gmail App Password!)
+const app = express();
+const port = process.env.PORT || 3000;
+
+// Middleware
+app.use(bodyParser.json());
+
+// Configure nodemailer transporter with Gmail SMTP and app password
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: 'epicesporthelp@gmail.com',
-    pass: 'pyjfxxsimldgdrjw' // Replace with Gmail App Password
+    user: 'epicesporthelp@gmail.com',          // Replace with your Gmail
+    pass: 'pyjfxxsimldgdrjw'     // Replace with your Gmail App Password
   }
 });
 
-// ✅ API: Root status check
+// Utility function to encode email (replace . with , to use as Firebase key)
+function encodeEmail(email) {
+  return email.replace(/\./g, ',');
+}
+
 app.get('/', (req, res) => {
   res.send('✅ OTP Server is Live!');
 });
 
-// ✅ API: Send OTP
 app.post('/send-otp', async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ success: false, message: 'Email required' });
+  try {
+    console.log('Received /send-otp request:', req.body);
 
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 mins from now
-
-  const encodedEmail = email.replace('.', ',');
-
-  // ✅ Save OTP to Firebase
-  const otpRef = admin.database().ref(`otps/${encodedEmail}`);
-  await otpRef.set({ code: otp, expiresAt });
-
-  // ✅ Send email
-  const mailOptions = {
-    from: 'epicesporthelp@gmail.com',
-    to: email,
-    subject: 'Your OTP Code',
-    text: `Your OTP code is: ${otp}. It will expire in 5 minutes.`
-  };
-
-  transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      return res.status(500).json({ success: false, message: 'Failed to send OTP email' });
+    const { email } = req.body;
+    if (!email) {
+      console.log('Email missing in request');
+      return res.status(400).json({ success: false, message: 'Email required' });
     }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 5 * 60 * 1000; // Expires in 5 minutes
+
+    const encodedEmail = encodeEmail(email);
+
+    // Save OTP + expiration in Firebase Realtime Database
+    await admin.database().ref(`otps/${encodedEmail}`).set({ code: otp, expiresAt });
+    console.log(`Saved OTP for ${email}: ${otp}`);
+
+    // Send OTP email
+    await transporter.sendMail({
+      from: '"EPIC E-SPORT" <epicesporthelp@gmail.com>',  // Your sender email
+      to: email,
+      subject: 'Your OTP Code',
+      text: `Your OTP code is: ${otp}. It will expire in 5 minutes.`
+    });
+
+    console.log(`OTP email sent to ${email}`);
+
     res.json({ success: true, message: 'OTP sent and saved in Firebase' });
-  });
+  } catch (error) {
+    console.error('Error in /send-otp:', error);
+    res.status(500).json({ success: false, message: 'Failed to send OTP email', error: error.message });
+  }
 });
 
-// ✅ API: Verify OTP
+// For testing: a verify endpoint (optional)
 app.post('/verify-otp', async (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || !otp) return res.status(400).json({ success: false, message: 'Email and OTP required' });
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res.status(400).json({ success: false, message: 'Email and OTP required' });
+    }
 
-  const encodedEmail = email.replace('.', ',');
-  const otpRef = admin.database().ref(`otps/${encodedEmail}`);
-  const snapshot = await otpRef.once('value');
+    const encodedEmail = encodeEmail(email);
+    const snapshot = await admin.database().ref(`otps/${encodedEmail}`).once('value');
+    const data = snapshot.val();
 
-  if (!snapshot.exists()) {
-    return res.status(404).json({ success: false, message: 'OTP not found or expired' });
+    if (!data) {
+      return res.status(400).json({ success: false, message: 'No OTP found for this email' });
+    }
+
+    if (data.code !== otp) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    if (Date.now() > data.expiresAt) {
+      return res.status(400).json({ success: false, message: 'OTP expired' });
+    }
+
+    // OTP verified, delete it from DB
+    await admin.database().ref(`otps/${encodedEmail}`).remove();
+
+    res.json({ success: true, message: 'OTP verified' });
+  } catch (error) {
+    console.error('Error in /verify-otp:', error);
+    res.status(500).json({ success: false, message: 'Verification failed', error: error.message });
   }
-
-  const data = snapshot.val();
-
-  if (Date.now() > data.expiresAt) {
-    await otpRef.remove();
-    return res.status(400).json({ success: false, message: 'OTP expired' });
-  }
-
-  if (otp !== data.code) {
-    return res.status(400).json({ success: false, message: 'Invalid OTP' });
-  }
-
-  await otpRef.remove(); // ✅ Remove OTP after successful verification
-  res.json({ success: true, message: 'OTP verified successfully' });
 });
 
-// ✅ Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.listen(port, () => {
+  console.log(`OTP Server listening on port ${port}`);
 });
