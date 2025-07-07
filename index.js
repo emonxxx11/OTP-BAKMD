@@ -1,14 +1,15 @@
+require('dotenv').config();
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
-require('dotenv').config();
 
 const app = express();
 app.use(bodyParser.json());
 
-// Firebase Admin service account credentials from env variables
+// Firebase Admin initialization
 const serviceAccount = {
   type: process.env.FIREBASE_TYPE,
   project_id: process.env.FIREBASE_PROJECT_ID,
@@ -81,7 +82,7 @@ app.post('/verify-otp', async (req, res) => {
 
     if (!otpData) return res.status(400).json({ success: false, message: 'OTP not found. Please request a new one.' });
 
-    if (Date.now() - otpData.createdAt > 300000) { // 5 min expiration
+    if (Date.now() - otpData.createdAt > 300000) { // 5 min expiry
       await otpRef.remove();
       return res.status(400).json({ success: false, message: 'OTP expired. Please request a new one.' });
     }
